@@ -31,6 +31,6 @@ Option | Default | Description
 --email-sender-name | | From name for notifications
 --email-sender-address | | From address for notifications
 --email-recipients | | Email recipients(s) for notifications
---verbose | true | Show verbose output
+--verbose | false | Show verbose output
 --timeout| 600 | Timeout for waiting for the app upgrade to complete
 
