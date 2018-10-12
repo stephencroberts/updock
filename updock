@@ -153,7 +153,8 @@ TIMEOUT=${TIMEOUT:-600}
 TEMPLATE=$1
 CONTAINER=$2
 # Get the directory of this script, even if symlinked
-DIR="cd "$(dirname "$(readlink "$0" || echo "$0")")" > /dev/null && pwd"
+DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}\
+")")" > /dev/null && pwd)"
 
 
 if [ ! -f "$DIR/templates/${TEMPLATE}.sh" ]; then
