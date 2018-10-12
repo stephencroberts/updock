@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+#
+# Upgrades a docker container with support for maintenance mode and
+# backups/restores in failure scenarios
+#
+# Author: Stephen Roberts <stephenroberts@gmail.com>
+# Version: 1
+
+
+EXIT_UPGRADE_FAILED=1
+EXIT_TEMPLATE_NOT_FOUND=64
+EXIT_UNDEFINED_FUNCTION=65
+
+#######################
+# Prints command usage
+#
+# Globals:
+#   0 - script name
+#######################
+function usage() {
+  cat <<EOF
+usage: $(basename "$0") [--email-sender-name name]
+	[--email-sender-address address] [--email-recipients recipients]
+	[--verbose] [--timeout seconds] template container
+EOF
+}
+
+###################
+# Print formatters
+#
+# Arguments:
+#   message string
+###################
+function print_header() {
+  printf "\\e[34m%b\\e[0m\\n" "$1"
+}
+function print_status() {
+  printf "\\e[32m%b\\e[0m\\n" "$1"
+}
+function print_error() {
+  printf "\\e[31m%b\\e[0m\\n" "$1"
+}
+
+#################################################
+# Logs output to stdout depending on log level
+#
+# Globals:
+#   VERBOSE - show verbose output
+#################################################
+function log() {
+  read -r BUFFER
+  [ "$VERBOSE" = true ] && echo "$BUFFER"
+}
+
+###############################################################
+# Sends email notifications via sendmail
+#
+# Globals:
+#   EMAIL_RECIPIENTS - comma-delimited list of email addresses
+#   EMAIL_SENDER_NAME - name of sender
+#   EMAIL_SENDER_ADDR - address of sender
+#
+# Arguments:
+#   subject
+#   body
+###############################################################
+function email() {
+  if [ ! -z "$EMAIL_SENDER_NAME" ] && [ ! -z "$EMAIL_SENDER_ADDR" ] && [ ! -z \
+    "$EMAIL_RECIPIENTS" ]; then
+  sendmail "$EMAIL_RECIPIENTS" <<-EOF
+		Subject: $1
+		From: $EMAIL_SENDER_NAME <$EMAIL_SENDER_ADDR>
+		$2
+	EOF
+  fi
+}
+
+##########################################
+# Gets the short id of a docker container
+#
+# Arguments:
+#   container name
+##########################################
+function get_container_id() {
+  docker image ls -aq "$1"
+}
+
+######################################
+# Gets the short id of a docker image
+#
+# Arguments:
+#   image name
+######################################
+function get_image_id() {
+  docker image ls -aq "$1"
+}
+
+##################################
+# Checks if a function is defined
+#
+# Arguments:
+#   function name
+##################################
+function function_exists() {
+  type "$1" 2>/dev/null | grep -q function
+}
+
+
+# Parse arguments
+POSITIONAL=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --email-sender-name)
+      EMAIL_SENDER_NAME="$1"
+      shift
+      shift
+      ;;
+    --email-sender-address)
+      EMAIL_SENDER_ADDR="$1"
+      shift
+      shift
+      ;;
+    --email-recipients)
+      EMAIL_RECIPIENTS="$1"
+      shift
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit
+      ;;
+    --verbose)
+      VERBOSE=true
+      shift
+      ;;
+    -t|--timeout)
+      TIMEOUT="$1"
+      shift
+      shift
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+
+# Show usage if not enough arguments
+[ "$#" -lt 2 ] && usage && exit
+
+TIMEOUT=${TIMEOUT:-600}
+TEMPLATE=$1
+CONTAINER=$2
+# Get the directory of this script, even if symlinked
+DIR="cd "$(dirname "$(readlink "$0" || echo "$0")")" > /dev/null && pwd"
+
+
+if [ ! -f "$DIR/templates/${TEMPLATE}.sh" ]; then
+  print_error "Template not found: ${TEMPLATE}"
+  printf "Available templates:\\n%b\\n" "$(ls "$DIR/templates")"
+  exit $EXIT_TEMPLATE_NOT_FOUND
+fi
+
+# shellcheck disable=SC1090
+source "$DIR/templates/${TEMPLATE}.sh"
+
+: "${IMAGE?Docker image not specified. Set IMAGE.}"
+
+if ! function_exists start_container; then
+  print_error "Function not defined: start_container"
+  exit $EXIT_UNDEFINED_FUNCTION
+fi
+
+if ! function_exists is_running; then
+  print_error "Function not defined: is_running"
+  exit $EXIT_UNDEFINED_FUNCTION
+fi
+
+if function_exists enter_maintenance_mode; then
+  if ! function_exists exit_maintenance_mode; then
+    print_error "Function not defined: exit_maintenance_mode"
+    exit $EXIT_UNDEFINED_FUNCTION
+  fi
+fi
+
+if function_exists backup; then
+  if ! function_exists restore; then
+    print_error "Function not defined: restore"
+    exit $EXIT_UNDEFINED_FUNCTION
+  fi
+fi
+
+
+print_header "####################"
+print_header "# $(echo "$CONTAINER" | tr "[:lower:]" "[:upper:]") UPDATE #"
+print_header "####################"
+
+print_status "Pulling latest docker image ..."
+docker pull "$IMAGE" | log
+
+RUNNING=$(docker container inspect --format "{{.Image}}" "$CONTAINER")
+LATEST=$(docker image inspect --format "{{.Id}}" "$IMAGE")
+LATEST_ID=$(get_image_id "$IMAGE")
+LATEST_NAME="${CONTAINER}-${LATEST_ID}"
+print_status "Current version: $RUNNING\\nLatest version: $LATEST"
+
+if [ "$RUNNING" != "$LATEST" ]; then
+  print_status "New docker image found!"
+
+  if function_exists enter_maintenance_mode; then
+    print_status "Entering maintenance mode ..."
+    enter_maintenance_mode "$CONTAINER" | log
+  fi
+
+  if function_exists backup; then
+    print_status "Backing up ..."
+    backup "$CONTAINER" | log
+  fi
+
+  print_status "Stopping container: ${CONTAINER} ..."
+  docker stop "$CONTAINER" | log
+
+  print_status "Starting container: ${LATEST_NAME} ..."
+  start_container "$LATEST_NAME" "$IMAGE" | log
+
+  printf "Waiting for sucessful response "
+  waitfor=$TIMEOUT
+  until is_running; do
+    printf '.'
+      sleep 1
+    waitfor=$((waitfor-1))
+    [ "$waitfor" = "0" ] && break
+  done
+  printf "\\n"
+
+  if [ "$waitfor" = "0" ]; then
+    print_error "Urgh!! Failed to get a successful response. Rolling back ..."
+
+    print_status "Stopping container: ${LATEST_NAME} ..."
+    docker stop "$LATEST_NAME" | log
+
+    print_status "Starting container: ${CONTAINER} ..."
+    docker start "$CONTAINER" | log
+
+    if function_exists restore; then
+      print_status "Restoring ..."
+      restore "$CONTAINER" | log
+    fi
+
+    if function_exists exit_maintenance_mode; then
+      print_status "Exiting maintenance mode ..."
+      exit_maintenance_mode "$CONTAINER" | log
+    fi
+
+    print_status "Removing container: ${LATEST_NAME} ..."
+    docker container rm "$LATEST_NAME" | log
+
+    email "[FAILURE] $CONTAINER update" \
+      "$CONTAINER failed to update! It has been rolled back."
+    exit $EXIT_UPGRADE_FAILED
+  fi
+
+  print_status "Removing container: ${CONTAINER} ..."
+  docker container rm "$CONTAINER" | log
+
+  print_status "Renaming ${LATEST_NAME} to ${CONTAINER} ..."
+  docker rename "$LATEST_NAME" "$CONTAINER" | log
+
+  if function_exists exit_maintenance_mode; then
+    print_status "Exiting maintenance mode ..."
+    exit_maintenance_mode "$CONTAINER" | log
+  fi
+
+  if function_exists get_version; then
+    VERSION=$(get_version "$CONTAINER")
+  else
+    VERSION=$(get_container_id "$CONTAINER")
+  fi
+  print_status "${CONTAINER} has been updated to ${VERSION}!"
+
+  email "[SUCCESS] ${CONTAINER} update" \
+    "${CONTAINER} was successfully updated to ${VERSION}!"
+else
+  print_status "${CONTAINER} is already the latest!"
+fi
+
