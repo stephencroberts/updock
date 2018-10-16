@@ -67,9 +67,9 @@ function log() {
 function email() {
   if [ ! -z "$EMAIL_SENDER_NAME" ] && [ ! -z "$EMAIL_SENDER_ADDR" ] && [ ! -z \
     "$EMAIL_RECIPIENTS" ]; then
-  sendmail "$EMAIL_RECIPIENTS" <<-EOF
+    sendmail "$EMAIL_RECIPIENTS" <<-EOF
 		Subject: $1
-		From: $EMAIL_SENDER_NAME <$EMAIL_SENDER_ADDR>
+		From: "$EMAIL_SENDER_NAME" <$EMAIL_SENDER_ADDR>
 		$2
 	EOF
   fi
@@ -111,17 +111,17 @@ POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --email-sender-name)
-      EMAIL_SENDER_NAME="$1"
+      EMAIL_SENDER_NAME="$2"
       shift
       shift
       ;;
     --email-sender-address)
-      EMAIL_SENDER_ADDR="$1"
+      EMAIL_SENDER_ADDR="$2"
       shift
       shift
       ;;
     --email-recipients)
-      EMAIL_RECIPIENTS="$1"
+      EMAIL_RECIPIENTS="$2"
       shift
       shift
       ;;
@@ -134,7 +134,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -t|--timeout)
-      TIMEOUT="$1"
+      TIMEOUT="$2"
       shift
       shift
       ;;
@@ -225,6 +225,16 @@ if [ "$RUNNING" != "$LATEST" ]; then
   print_status "Starting container: ${LATEST_NAME} ..."
   start_container "$LATEST_NAME" "$IMAGE" | log
 
+  if function_exists upgrade; then
+    print_status "Performing upgrade..."
+       upgrade "$LATEST_NAME" | log
+  fi
+
+  if function_exists exit_maintenance_mode; then
+    print_status "Exiting maintenance mode ..."
+    exit_maintenance_mode "$LATEST_NAME" | log
+  fi
+
   printf "Waiting for sucessful response "
   waitfor=$TIMEOUT
   until is_running; do
@@ -257,8 +267,13 @@ if [ "$RUNNING" != "$LATEST" ]; then
     print_status "Removing container: ${LATEST_NAME} ..."
     docker container rm "$LATEST_NAME" | log
 
+    if function_exists get_version; then
+      VERSION=$(get_version "$CONTAINER")
+    else
+      VERSION=$(get_container_id "$CONTAINER")
+    fi
     email "[FAILURE] $CONTAINER update" \
-      "$CONTAINER failed to update! It has been rolled back."
+      "$CONTAINER failed to update! It has been rolled back to ${VERSION}."
     exit $EXIT_UPGRADE_FAILED
   fi
 

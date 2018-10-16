@@ -10,9 +10,9 @@
 : "${GITLAB_DATA?GitLab data directory is required. Set GITLAB_DATA.}"
 : "${GITLAB_URL?GitLab URL is required. Set GITLAB_URL.}"
 
-GITLAB_HTTP_PORT="${HTTP_PORT:-80}"
-GITLAB_HTTPS_PORT="${HTTPS_PORT:-443}"
-GITLAB_SSH_PORT="${SSH_PORT:-22}"
+GITLAB_HTTP_PORT="${GITLAB_HTTP_PORT:-80}"
+GITLAB_HTTPS_PORT="${GITLAB_HTTPS_PORT:-443}"
+GITLAB_SSH_PORT="${GITLAB_SSH_PORT:-22}"
 
 export IMAGE="${IMAGE:-gitlab/gitlab-ce:latest}"
 
@@ -53,7 +53,7 @@ function is_running() {
 #   container name
 ###################################
 function enter_maintenance_mode() {
-  sudo docker exec "$1" gitlab-ctl deploy-page up
+  docker exec "$1" gitlab-ctl deploy-page up
 }
 
 ######################################
@@ -63,7 +63,7 @@ function enter_maintenance_mode() {
 #   container name
 ######################################
 function exit_maintenance_mode() {
-  sudo docker exec "$1" gitlab-ctl deploy-page down
+  docker exec "$1" gitlab-ctl deploy-page down
 }
 
 ##############################
@@ -73,7 +73,7 @@ function exit_maintenance_mode() {
 #   container name
 ##############################
 function get_version() {
-  sudo docker exec "$1" cat /opt/gitlab/version-manifest.txt | grep gitlab-ce |\
+  docker exec "$1" cat /opt/gitlab/version-manifest.txt | grep gitlab-ce |\
     sed 's/gitlab-ce //'
 }
 
@@ -84,7 +84,7 @@ function get_version() {
 #   container name
 ##############################
 function backup() {
-  sudo docker exec "$1" gitlab-rake gitlab:backup:create
+  docker exec "$1" gitlab-rake gitlab:backup:create
 }
 
 #################################
@@ -94,7 +94,7 @@ function backup() {
 #   container name
 #################################
 function restore() {
-  sudo docker exec "$1" gitlab-ctl reconfigure
-  sudo docker exec "$1" gitlab-rake gitlab:backup:restore
+  docker exec "$1" gitlab-ctl reconfigure
+  docker exec "$1" gitlab-rake gitlab:backup:restore
 }
 
